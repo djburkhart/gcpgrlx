@@ -1,0 +1,33 @@
+project_id: sample-platform-prod
+region: us-central1
+artifact_registry_repository: platform-services
+deployment_root: /var/lib/gcpgrlx/platform
+required_services:
+  - artifactregistry.googleapis.com
+  - run.googleapis.com
+services:
+  - name: public-api
+    service_account: public-api@sample-platform-prod.iam.gserviceaccount.com
+    min_instances: 1
+    max_instances: 6
+    allow_unauthenticated: false
+    ingress: internal
+    env:
+      APP_ENV: production
+      HTTP_PORT: :8080
+    labels:
+      app: platform
+      tier: api
+  - name: worker
+    service_account: worker@sample-platform-prod.iam.gserviceaccount.com
+    cpu: "2"
+    memory: 1Gi
+    max_instances: 10
+    allow_unauthenticated: false
+    ingress: internal
+    env:
+      APP_ENV: production
+      JOB_QUEUE: default
+    labels:
+      app: platform
+      tier: worker
