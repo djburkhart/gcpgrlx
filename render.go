@@ -85,6 +85,7 @@ func renderDeployCommand(cfg Config, service Service) string {
 		"--port", strconv.Itoa(service.Port),
 		"--cpu", shellQuote(service.CPU),
 		"--memory", shellQuote(service.Memory),
+		"--concurrency", strconv.Itoa(service.Concurrency),
 		"--min-instances", strconv.Itoa(service.MinInstances),
 		"--max-instances", strconv.Itoa(service.MaxInstances),
 		"--timeout", shellQuote(service.Timeout),
@@ -101,6 +102,22 @@ func renderDeployCommand(cfg Config, service Service) string {
 		} else {
 			parts = append(parts, "--no-allow-unauthenticated")
 		}
+	}
+
+	if service.UseHTTP2 != nil {
+		if *service.UseHTTP2 {
+			parts = append(parts, "--use-http2")
+		} else {
+			parts = append(parts, "--no-use-http2")
+		}
+	}
+
+	if service.VPCConnector != "" {
+		parts = append(parts, "--vpc-connector", shellQuote(service.VPCConnector))
+	}
+
+	if service.VPCEgress != "" {
+		parts = append(parts, "--vpc-egress", shellQuote(service.VPCEgress))
 	}
 
 	if len(service.Env) > 0 {

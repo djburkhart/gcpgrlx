@@ -6,28 +6,34 @@ required_services:
   - artifactregistry.googleapis.com
   - run.googleapis.com
 services:
-  - name: public-api
-    service_account: public-api@sample-platform-prod.iam.gserviceaccount.com
+  - name: identity-grpc
+    protocol: grpc
+    service_account: identity-grpc@sample-platform-prod.iam.gserviceaccount.com
     min_instances: 1
     max_instances: 6
-    allow_unauthenticated: false
-    ingress: internal
+    concurrency: 25
+    vpc_connector: projects/sample-platform-prod/locations/us-central1/connectors/core
+    vpc_egress: private-ranges-only
     env:
       APP_ENV: production
-      HTTP_PORT: :8080
+      GRPC_PORT: :50051
     labels:
       app: platform
-      tier: api
-  - name: worker
-    service_account: worker@sample-platform-prod.iam.gserviceaccount.com
+      protocol: grpc
+      tier: control-plane
+  - name: matching-grpc
+    protocol: grpc
+    service_account: matching-grpc@sample-platform-prod.iam.gserviceaccount.com
     cpu: "2"
     memory: 1Gi
+    concurrency: 40
     max_instances: 10
-    allow_unauthenticated: false
-    ingress: internal
+    vpc_connector: projects/sample-platform-prod/locations/us-central1/connectors/core
+    vpc_egress: private-ranges-only
     env:
       APP_ENV: production
-      JOB_QUEUE: default
+      MATCH_PIPELINE: default
     labels:
       app: platform
-      tier: worker
+      protocol: grpc
+      tier: matching

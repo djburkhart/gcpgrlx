@@ -1,6 +1,6 @@
 # gcpgrlx
 
-`gcpgrlx` is a GCP-specific companion module for [`grlx`](https://github.com/gogrlx/grlx) that renders deployment recipes for shipping containerized microservices to **Google Cloud Run**.
+`gcpgrlx` is a GCP-specific companion module for [`grlx`](https://github.com/gogrlx/grlx) that renders deployment recipes for shipping containerized **gRPC and HTTP microservices** to **Google Cloud Run**.
 
 It is designed for teams that want to keep `grlx` as the automation layer while using Google Cloud as the runtime target.
 
@@ -12,6 +12,7 @@ It is designed for teams that want to keep `grlx` as the automation layer while 
   - enabling required GCP APIs
   - ensuring an Artifact Registry repository exists
   - deploying each service to Cloud Run
+- applies gRPC-friendly defaults such as internal ingress, HTTP/2, and tighter concurrency
 - exposes the renderer as both a Go package and a small CLI
 
 ## Why Cloud Run
@@ -21,6 +22,13 @@ Cloud Run is a strong default for microservices because it keeps the deployment 
 - each service is a container
 - ingress, scaling, CPU, memory, and auth are first-class flags
 - it maps cleanly onto generated `grlx` `cmd.run` states
+
+For gRPC services, `gcpgrlx` can emit Cloud Run deploy commands with:
+
+- `--use-http2`
+- internal-only ingress by default
+- disabled unauthenticated access by default
+- service-level concurrency and optional VPC connector settings
 
 ## Install
 
@@ -50,6 +58,7 @@ The generated recipe includes states like:
 - enable `run.googleapis.com` and `artifactregistry.googleapis.com`
 - create the Artifact Registry repository if missing
 - deploy each microservice with `gcloud run deploy`
+- configure gRPC services with end-to-end HTTP/2 support
 
 ## Go package
 
@@ -99,16 +108,30 @@ Per-service fields:
 - `name`
 - `image` (optional; default Artifact Registry URL is generated when omitted)
 - `service_account` (optional)
+- `protocol` (`http` or `grpc`)
 - `port`
 - `cpu`
 - `memory`
+- `concurrency`
 - `min_instances`
 - `max_instances`
 - `timeout`
+- `use_http2`
 - `allow_unauthenticated`
 - `ingress`
+- `vpc_connector`
+- `vpc_egress`
 - `env`
 - `labels`
+
+### gRPC defaults
+
+If `protocol: grpc` is set for a service, `gcpgrlx` automatically defaults:
+
+- `ingress: internal`
+- `allow_unauthenticated: false`
+- `use_http2: true`
+- `concurrency: 20`
 
 ## Validation
 

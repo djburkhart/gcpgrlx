@@ -29,6 +29,9 @@ services:
 	if got := cfg.Services[0].Port; got != 8080 {
 		t.Fatalf("unexpected default port: %d", got)
 	}
+	if got := cfg.Services[0].Protocol; got != "http" {
+		t.Fatalf("unexpected default protocol: %s", got)
+	}
 }
 
 func TestValidateRejectsBadServiceName(t *testing.T) {
@@ -46,6 +49,36 @@ func TestValidateRejectsBadServiceName(t *testing.T) {
 	}
 }
 
+func TestParseConfigAppliesGRPCDefaults(t *testing.T) {
+	raw := []byte(`
+project_id: grpc-prod
+region: us-central1
+artifact_registry_repository: grpc-services
+services:
+  - name: identity-grpc
+    protocol: grpc
+`)
+
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		t.Fatalf("ParseConfig returned error: %v", err)
+	}
+
+	service := cfg.Services[0]
+	if service.Concurrency != 20 {
+		t.Fatalf("unexpected grpc concurrency: %d", service.Concurrency)
+	}
+	if service.Ingress != "internal" {
+		t.Fatalf("unexpected grpc ingress: %s", service.Ingress)
+	}
+	if service.UseHTTP2 == nil || !*service.UseHTTP2 {
+		t.Fatal("expected grpc service to enable http2")
+	}
+	if service.AllowUnauthenticated == nil || *service.AllowUnauthenticated {
+		t.Fatal("expected grpc service to disable unauthenticated access by default")
+	}
+}
+
 func TestRenderRecipeIncludesCloudRunDeployFlags(t *testing.T) {
 	cfg := Config{
 		ProjectID:                  "cohora-prod",
@@ -54,16 +87,21 @@ func TestRenderRecipeIncludesCloudRunDeployFlags(t *testing.T) {
 		Services: []Service{
 			{
 				Name:                 "identity-api",
+				Protocol:             "grpc",
 				Image:                "us-central1-docker.pkg.dev/cohora-prod/cohora/identity-api:latest",
 				ServiceAccount:       "identity@cohora-prod.iam.gserviceaccount.com",
 				Port:                 8081,
 				CPU:                  "2",
 				Memory:               "1Gi",
+				Concurrency:          25,
 				MinInstances:         1,
 				MaxInstances:         5,
 				Timeout:              "600s",
 				Ingress:              "internal",
+				UseHTTP2:             boolPtr(true),
 				AllowUnauthenticated: boolPtr(false),
+				VPCConnector:         "projects/cohora-prod/locations/us-central1/connectors/core",
+				VPCEgress:            "private-ranges-only",
 				Env: map[string]string{
 					"APP_ENV":   "prod",
 					"GRPC_PORT": "50051",
@@ -85,6 +123,10 @@ func TestRenderRecipeIncludesCloudRunDeployFlags(t *testing.T) {
 	assertContains(t, recipe, "file.directory:")
 	assertContains(t, recipe, "gcloud run deploy 'identity-api'")
 	assertContains(t, recipe, "--no-allow-unauthenticated")
+	assertContains(t, recipe, "--use-http2")
+	assertContains(t, recipe, "--concurrency 25")
+	assertContains(t, recipe, "--vpc-connector 'projects/cohora-prod/locations/us-central1/connectors/core'")
+	assertContains(t, recipe, "--vpc-egress 'private-ranges-only'")
 	assertContains(t, recipe, "--service-account 'identity@cohora-prod.iam.gserviceaccount.com'")
 	assertContains(t, recipe, "--set-env-vars 'APP_ENV=prod,GRPC_PORT=50051'")
 	assertContains(t, recipe, "--labels 'service=identity,stack=cohora'")
