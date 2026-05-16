@@ -8,12 +8,37 @@ required_services:
 services:
   - name: identity-grpc
     protocol: grpc
+    command: /app/identity
+    args:
+      - serve
+      - --config
+      - /etc/platform/config.yaml
     service_account: identity-grpc@sample-platform-prod.iam.gserviceaccount.com
     min_instances: 1
     max_instances: 6
     concurrency: 25
+    revision_suffix: stable
+    traffic_percent: 100
+    cpu_throttling: false
+    startup_cpu_boost: true
+    execution_environment: gen2
     vpc_connector: projects/sample-platform-prod/locations/us-central1/connectors/core
     vpc_egress: private-ranges-only
+    cloud_sql_instances:
+      - sample-platform-prod:us-central1:identity-db
+    secrets:
+      - target: DB_PASSWORD
+        secret: identity-db-password
+        version: latest
+    startup_probe:
+      type: grpc
+      port: 50051
+      initial_delay_seconds: 5
+      period_seconds: 10
+    liveness_probe:
+      type: grpc
+      port: 50051
+      failure_threshold: 3
     env:
       APP_ENV: production
       GRPC_PORT: :50051
@@ -28,8 +53,11 @@ services:
     memory: 1Gi
     concurrency: 40
     max_instances: 10
+    no_traffic: true
     vpc_connector: projects/sample-platform-prod/locations/us-central1/connectors/core
     vpc_egress: private-ranges-only
+    annotations:
+      run.googleapis.com/launch-stage: BETA
     env:
       APP_ENV: production
       MATCH_PIPELINE: default

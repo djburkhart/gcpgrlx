@@ -13,6 +13,7 @@ It is designed for teams that want to keep `grlx` as the automation layer while 
   - ensuring an Artifact Registry repository exists
   - deploying each service to Cloud Run
 - applies gRPC-friendly defaults such as internal ingress, HTTP/2, and tighter concurrency
+- supports advanced deployment controls like secrets, probes, rollout traffic, Cloud SQL, and revision settings
 - exposes the renderer as both a Go package and a small CLI
 
 ## Why Cloud Run
@@ -29,6 +30,7 @@ For gRPC services, `gcpgrlx` can emit Cloud Run deploy commands with:
 - internal-only ingress by default
 - disabled unauthenticated access by default
 - service-level concurrency and optional VPC connector settings
+- optional startup and liveness probes via `gcloud beta run deploy`
 
 ## Install
 
@@ -49,6 +51,36 @@ go run .\cmd\gcpgrlx render -f .\examples\microservices.yaml -out .\dist
 That writes:
 
 - `dist\deploy.grlx`
+
+## Render directly to stdout
+
+```powershell
+go run .\cmd\gcpgrlx render-stdout -f .\examples\microservices.yaml
+```
+
+## Preview a deployment plan
+
+```powershell
+go run .\cmd\gcpgrlx plan -f .\examples\microservices.yaml
+```
+
+## Validate a config
+
+```powershell
+go run .\cmd\gcpgrlx validate -f .\examples\microservices.yaml
+```
+
+## Initialize a starter config
+
+```powershell
+go run .\cmd\gcpgrlx init -out .\microservices.yaml
+```
+
+To print the starter config instead of writing a file:
+
+```powershell
+go run .\cmd\gcpgrlx init --stdout
+```
 
 ## Example output shape
 
@@ -109,6 +141,8 @@ Per-service fields:
 - `image` (optional; default Artifact Registry URL is generated when omitted)
 - `service_account` (optional)
 - `protocol` (`http` or `grpc`)
+- `command`
+- `args`
 - `port`
 - `cpu`
 - `memory`
@@ -116,13 +150,24 @@ Per-service fields:
 - `min_instances`
 - `max_instances`
 - `timeout`
+- `revision_suffix`
+- `traffic_percent`
+- `no_traffic`
+- `cpu_throttling`
+- `startup_cpu_boost`
+- `execution_environment`
 - `use_http2`
 - `allow_unauthenticated`
 - `ingress`
 - `vpc_connector`
 - `vpc_egress`
+- `cloud_sql_instances`
+- `secrets`
+- `startup_probe`
+- `liveness_probe`
 - `env`
 - `labels`
+- `annotations`
 
 ### gRPC defaults
 
@@ -132,6 +177,16 @@ If `protocol: grpc` is set for a service, `gcpgrlx` automatically defaults:
 - `allow_unauthenticated: false`
 - `use_http2: true`
 - `concurrency: 20`
+
+### Advanced deployment fields
+
+- `secrets` render to `--update-secrets`
+- `cloud_sql_instances` render to `--add-cloudsql-instances`
+- `traffic_percent` adds a follow-up `gcloud run services update-traffic` step
+- `no_traffic: true` keeps a new revision dark after deploy
+- `command` and `args` override container startup behavior
+- `cpu_throttling`, `startup_cpu_boost`, and `execution_environment` control runtime behavior
+- `startup_probe` and `liveness_probe` switch recipe generation to `gcloud beta run deploy`
 
 ## Validation
 
