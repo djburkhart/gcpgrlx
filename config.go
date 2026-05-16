@@ -85,84 +85,63 @@ func ParseConfig(raw []byte) (Config, error) {
 }
 
 func (c *Config) setDefaults() {
-	if strings.TrimSpace(c.DeploymentRoot) == "" {
-		c.DeploymentRoot = "/var/lib/gcpgrlx"
+	c.setGlobalDefaults()
+	for index := range c.Services {
+		c.setServiceDefaults(&c.Services[index])
 	}
+}
+
+func (c Config) Validate() error {
+	if err := c.validateRequiredFields(); err != nil {
+		return err
+	}
+	seen := map[string]struct{}{}
+	for _, service := range c.Services {
+		if err := validateServiceName(service.Name, seen); err != nil {
+			return err
+		}
+		if err := validateService(service); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) setGlobalDefaults() {
+	c.DeploymentRoot = defaultTrimmed(c.DeploymentRoot, "/var/lib/gcpgrlx")
 	if len(c.RequiredServices) == 0 {
 		c.RequiredServices = []string{
 			"run.googleapis.com",
 			"artifactregistry.googleapis.com",
 		}
 	}
-	for index := range c.Services {
-		service := &c.Services[index]
-		if strings.TrimSpace(service.Protocol) == "" {
-			service.Protocol = "http"
-		}
-		if service.Port == 0 {
-			service.Port = 8080
-		}
-		if strings.TrimSpace(service.CPU) == "" {
-			service.CPU = "1"
-		}
-		if strings.TrimSpace(service.Memory) == "" {
-			service.Memory = "512Mi"
-		}
-		if service.MaxInstances == 0 {
-			service.MaxInstances = 3
-		}
-		if strings.TrimSpace(service.Timeout) == "" {
-			service.Timeout = "300s"
-		}
-		if strings.TrimSpace(service.ExecutionEnvironment) == "" {
-			service.ExecutionEnvironment = "gen2"
-		}
-		if service.Concurrency == 0 {
-			if service.Protocol == "grpc" {
-				service.Concurrency = 20
-			} else {
-				service.Concurrency = 80
-			}
-		}
-		if strings.TrimSpace(service.Ingress) == "" {
-			if service.Protocol == "grpc" {
-				// gRPC services are usually private, HTTP/2-backed backends rather than public endpoints.
-				service.Ingress = "internal"
-			} else {
-				service.Ingress = "all"
-			}
-		}
-		if service.Protocol == "grpc" {
-			// Cloud Run gRPC needs HTTP/2 enabled, and internal auth is the safer default.
-			if service.UseHTTP2 == nil {
-				value := true
-				service.UseHTTP2 = &value
-			}
-			if service.AllowUnauthenticated == nil {
-				value := false
-				service.AllowUnauthenticated = &value
-			}
-		}
-		if service.Env == nil {
-			service.Env = map[string]string{}
-		}
-		if service.Labels == nil {
-			service.Labels = map[string]string{}
-		}
-		if service.Annotations == nil {
-			service.Annotations = map[string]string{}
-		}
-		if strings.TrimSpace(service.Image) == "" &&
-			strings.TrimSpace(c.ProjectID) != "" &&
-			strings.TrimSpace(c.Region) != "" &&
-			strings.TrimSpace(c.ArtifactRegistryRepository) != "" &&
-			strings.TrimSpace(service.Name) != "" {
-			service.Image = defaultImage(c.Region, c.ProjectID, c.ArtifactRegistryRepository, service.Name)
-		}
+}
+
+func (c Config) setServiceDefaults(service *Service) {
+	service.Protocol = defaultTrimmed(service.Protocol, "http")
+	service.Port = defaultInt(service.Port, 8080)
+	service.CPU = defaultTrimmed(service.CPU, "1")
+	service.Memory = defaultTrimmed(service.Memory, "512Mi")
+	service.MaxInstances = defaultInt(service.MaxInstances, 3)
+	service.Timeout = defaultTrimmed(service.Timeout, "300s")
+	service.ExecutionEnvironment = defaultTrimmed(service.ExecutionEnvironment, "gen2")
+	service.Concurrency = defaultInt(service.Concurrency, defaultConcurrency(service.Protocol))
+	service.Ingress = defaultTrimmed(service.Ingress, defaultIngress(service.Protocol))
+
+	if service.Protocol == "grpc" {
+		// Cloud Run gRPC needs HTTP/2 enabled, and internal auth is the safer default.
+		service.UseHTTP2 = defaultBoolPointer(service.UseHTTP2, true)
+		service.AllowUnauthenticated = defaultBoolPointer(service.AllowUnauthenticated, false)
+	}
+
+	ensureServiceMaps(service)
+	if shouldSetDefaultImage(c, *service) {
+		service.Image = defaultImage(c.Region, c.ProjectID, c.ArtifactRegistryRepository, service.Name)
 	}
 }
 
-func (c Config) Validate() error {
+func (c Config) validateRequiredFields() error {
 	if strings.TrimSpace(c.ProjectID) == "" {
 		return fmt.Errorf("project_id is required")
 	}
@@ -175,72 +154,106 @@ func (c Config) Validate() error {
 	if len(c.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}
+	return nil
+}
 
-	seen := map[string]struct{}{}
-	for _, service := range c.Services {
-		if !serviceNamePattern.MatchString(service.Name) {
-			return fmt.Errorf("service %q must be a valid Cloud Run service name", service.Name)
-		}
-		if _, exists := seen[service.Name]; exists {
-			return fmt.Errorf("service %q is duplicated", service.Name)
-		}
-		seen[service.Name] = struct{}{}
+func validateServiceName(name string, seen map[string]struct{}) error {
+	if !serviceNamePattern.MatchString(name) {
+		return fmt.Errorf("service %q must be a valid Cloud Run service name", name)
+	}
+	if _, exists := seen[name]; exists {
+		return fmt.Errorf("service %q is duplicated", name)
+	}
+	seen[name] = struct{}{}
+	return nil
+}
 
-		if service.Port <= 0 {
-			return fmt.Errorf("service %q port must be greater than zero", service.Name)
-		}
-		if service.Protocol != "http" && service.Protocol != "grpc" {
-			return fmt.Errorf("service %q protocol must be http or grpc", service.Name)
-		}
-		if service.NoTraffic && service.TrafficPercent > 0 {
-			return fmt.Errorf("service %q cannot set both no_traffic and traffic_percent", service.Name)
-		}
-		if service.TrafficPercent < 0 || service.TrafficPercent > 100 {
-			return fmt.Errorf("service %q traffic_percent must be between 0 and 100", service.Name)
-		}
-		if service.Concurrency <= 0 {
-			return fmt.Errorf("service %q concurrency must be greater than zero", service.Name)
-		}
-		if service.MinInstances < 0 {
-			return fmt.Errorf("service %q min_instances cannot be negative", service.Name)
-		}
-		if service.MaxInstances < 0 {
-			return fmt.Errorf("service %q max_instances cannot be negative", service.Name)
-		}
-		if service.MaxInstances > 0 && service.MaxInstances < service.MinInstances {
-			return fmt.Errorf("service %q max_instances must be greater than or equal to min_instances", service.Name)
-		}
-		if strings.TrimSpace(service.Image) == "" {
-			return fmt.Errorf("service %q image cannot be empty", service.Name)
-		}
-		if service.Ingress != "all" && service.Ingress != "internal" && service.Ingress != "internal-and-cloud-load-balancing" {
-			return fmt.Errorf("service %q ingress must be all, internal, or internal-and-cloud-load-balancing", service.Name)
-		}
-		if service.VPCEgress != "" && service.VPCEgress != "all-traffic" && service.VPCEgress != "private-ranges-only" {
-			return fmt.Errorf("service %q vpc_egress must be all-traffic or private-ranges-only", service.Name)
-		}
-		if service.ExecutionEnvironment != "" && service.ExecutionEnvironment != "gen1" && service.ExecutionEnvironment != "gen2" {
-			return fmt.Errorf("service %q execution_environment must be gen1 or gen2", service.Name)
-		}
-		if service.Protocol == "grpc" && service.UseHTTP2 != nil && !*service.UseHTTP2 {
-			return fmt.Errorf("service %q grpc services must enable use_http2", service.Name)
-		}
-		for _, secret := range service.Secrets {
-			if strings.TrimSpace(secret.Target) == "" {
-				return fmt.Errorf("service %q secret target is required", service.Name)
-			}
-			if strings.TrimSpace(secret.Secret) == "" {
-				return fmt.Errorf("service %q secret name is required", service.Name)
-			}
-		}
-		if err := validateProbe(service.Name, "startup_probe", service.StartupProbe); err != nil {
-			return err
-		}
-		if err := validateProbe(service.Name, "liveness_probe", service.LivenessProbe); err != nil {
+func validateService(service Service) error {
+	validators := []func(Service) error{
+		validateServiceCore,
+		validateServiceScaling,
+		validateServiceRuntime,
+		validateServiceSecrets,
+		validateServiceProbes,
+	}
+	for _, validate := range validators {
+		if err := validate(service); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func validateServiceCore(service Service) error {
+	if service.Port <= 0 {
+		return fmt.Errorf("service %q port must be greater than zero", service.Name)
+	}
+	if service.Protocol != "http" && service.Protocol != "grpc" {
+		return fmt.Errorf("service %q protocol must be http or grpc", service.Name)
+	}
+	if strings.TrimSpace(service.Image) == "" {
+		return fmt.Errorf("service %q image cannot be empty", service.Name)
+	}
+	if service.NoTraffic && service.TrafficPercent > 0 {
+		return fmt.Errorf("service %q cannot set both no_traffic and traffic_percent", service.Name)
+	}
+	if service.TrafficPercent < 0 || service.TrafficPercent > 100 {
+		return fmt.Errorf("service %q traffic_percent must be between 0 and 100", service.Name)
+	}
+	return nil
+}
+
+func validateServiceScaling(service Service) error {
+	if service.Concurrency <= 0 {
+		return fmt.Errorf("service %q concurrency must be greater than zero", service.Name)
+	}
+	if service.MinInstances < 0 {
+		return fmt.Errorf("service %q min_instances cannot be negative", service.Name)
+	}
+	if service.MaxInstances < 0 {
+		return fmt.Errorf("service %q max_instances cannot be negative", service.Name)
+	}
+	if service.MaxInstances > 0 && service.MaxInstances < service.MinInstances {
+		return fmt.Errorf("service %q max_instances must be greater than or equal to min_instances", service.Name)
+	}
+	return nil
+}
+
+func validateServiceRuntime(service Service) error {
+	if service.Ingress != "all" && service.Ingress != "internal" && service.Ingress != "internal-and-cloud-load-balancing" {
+		return fmt.Errorf("service %q ingress must be all, internal, or internal-and-cloud-load-balancing", service.Name)
+	}
+	if service.VPCEgress != "" && service.VPCEgress != "all-traffic" && service.VPCEgress != "private-ranges-only" {
+		return fmt.Errorf("service %q vpc_egress must be all-traffic or private-ranges-only", service.Name)
+	}
+	if service.ExecutionEnvironment != "" && service.ExecutionEnvironment != "gen1" && service.ExecutionEnvironment != "gen2" {
+		return fmt.Errorf("service %q execution_environment must be gen1 or gen2", service.Name)
+	}
+	if service.Protocol == "grpc" && service.UseHTTP2 != nil && !*service.UseHTTP2 {
+		return fmt.Errorf("service %q grpc services must enable use_http2", service.Name)
+	}
+	return nil
+}
+
+func validateServiceSecrets(service Service) error {
+	for _, secret := range service.Secrets {
+		if strings.TrimSpace(secret.Target) == "" {
+			return fmt.Errorf("service %q secret target is required", service.Name)
+		}
+		if strings.TrimSpace(secret.Secret) == "" {
+			return fmt.Errorf("service %q secret name is required", service.Name)
+		}
+	}
+	return nil
+}
+
+func validateServiceProbes(service Service) error {
+	if err := validateProbe(service.Name, "startup_probe", service.StartupProbe); err != nil {
+		return err
+	}
+	if err := validateProbe(service.Name, "liveness_probe", service.LivenessProbe); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -306,4 +319,61 @@ func validateProbe(serviceName string, field string, probe *Probe) error {
 
 func defaultImage(region string, projectID string, repository string, serviceName string) string {
 	return fmt.Sprintf("%s-docker.pkg.dev/%s/%s/%s:latest", region, projectID, repository, serviceName)
+}
+
+func defaultTrimmed(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func defaultInt(value int, fallback int) int {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
+func defaultBoolPointer(value *bool, fallback bool) *bool {
+	if value != nil {
+		return value
+	}
+	result := fallback
+	return &result
+}
+
+func defaultConcurrency(protocol string) int {
+	if protocol == "grpc" {
+		return 20
+	}
+	return 80
+}
+
+func defaultIngress(protocol string) string {
+	if protocol == "grpc" {
+		// gRPC services are usually private, HTTP/2-backed backends rather than public endpoints.
+		return "internal"
+	}
+	return "all"
+}
+
+func ensureServiceMaps(service *Service) {
+	if service.Env == nil {
+		service.Env = map[string]string{}
+	}
+	if service.Labels == nil {
+		service.Labels = map[string]string{}
+	}
+	if service.Annotations == nil {
+		service.Annotations = map[string]string{}
+	}
+}
+
+func shouldSetDefaultImage(cfg Config, service Service) bool {
+	return strings.TrimSpace(service.Image) == "" &&
+		strings.TrimSpace(cfg.ProjectID) != "" &&
+		strings.TrimSpace(cfg.Region) != "" &&
+		strings.TrimSpace(cfg.ArtifactRegistryRepository) != "" &&
+		strings.TrimSpace(service.Name) != ""
 }

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on **Keep a Changelog**, with the current working tree tracked under **Unreleased** until those changes are committed and tagged.
 
+## [v0.2.1] - 2026-05-16
+- Update `.gitignore`.
+- Add release automation.
+- split setDefaults() into top-level/service-specific default helpers
+- split Validate() into focused validation helpers for required fields, names, scaling, runtime, secrets, and probes
+- split renderDeployCommand() into base command, flag appenders, toggle helpers, and map/secret rendering helpers
+
 ## [v0.2.0] - 2026-05-16
 
 ### Added

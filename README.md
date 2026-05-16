@@ -1,5 +1,12 @@
 # gcpgrlx
 
+[![CodeQL](https://github.com/djburkhart/gcpgrlx/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/djburkhart/gcpgrlx/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/github/license/djburkhart/gcpgrlx)](https://github.com/djburkhart/gcpgrlx/blob/main/LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/djburkhart/gcpgrlx)](https://github.com/djburkhart/gcpgrlx/blob/main/go.mod)
+[![GitHub release](https://img.shields.io/github/v/release/djburkhart/gcpgrlx)](https://github.com/djburkhart/gcpgrlx/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/djburkhart/gcpgrlx)](https://goreportcard.com/report/github.com/djburkhart/gcpgrlx)
+[![Go Reference](https://pkg.go.dev/badge/github.com/djburkhart/gcpgrlx.svg)](https://pkg.go.dev/github.com/djburkhart/gcpgrlx)
+
 `gcpgrlx` is a GCP-specific companion module for [`grlx`](https://github.com/gogrlx/grlx) that renders deployment recipes for shipping containerized **gRPC and HTTP microservices** to **Google Cloud Run**.
 
 It is designed for teams that want to keep `grlx` as the automation layer while using Google Cloud as the runtime target.
@@ -15,6 +22,13 @@ It is designed for teams that want to keep `grlx` as the automation layer while 
 - applies gRPC-friendly defaults such as internal ingress, HTTP/2, and tighter concurrency
 - supports advanced deployment controls like secrets, probes, rollout traffic, Cloud SQL, and revision settings
 - exposes the renderer as both a Go package and a small CLI
+
+## How it works together
+
+<p align="center">
+	<img src="./overview.png" alt="Overview of how gcpgrlx renders recipes and grlx executes them" width="250" />
+</p>
+
 
 ## Why Cloud Run
 
@@ -51,6 +65,30 @@ go run .\cmd\gcpgrlx render -f .\examples\microservices.yaml -out .\dist
 That writes:
 
 - `dist\deploy.grlx`
+
+## Use the generated recipe with grlx
+
+Once your `grlx` CLI is connected to a `farmer` and your target sprout or cohort is registered, you can cook the generated recipe directly.
+
+Preview the recipe without applying changes:
+
+```powershell
+grlx cook .\dist\deploy.grlx -T gcp-runner --test
+```
+
+Apply the deployment recipe to a target sprout:
+
+```powershell
+grlx cook .\dist\deploy.grlx -T gcp-runner
+```
+
+Or target a cohort instead of a single sprout:
+
+```powershell
+grlx cook .\dist\deploy.grlx -C platform
+```
+
+This is the intended workflow: `gcpgrlx` renders the Cloud Run deployment recipe, and `grlx` distributes and executes that recipe against the machines that have `gcloud` and the required Google Cloud credentials.
 
 ## Render directly to stdout
 

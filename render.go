@@ -142,130 +142,23 @@ func planStepTimeout(title string) string {
 }
 
 func renderDeployCommand(cfg Config, service Service) string {
-	deployCommand := "gcloud run deploy"
-	if service.StartupProbe != nil || service.LivenessProbe != nil {
-		// Probe flags currently live on the beta deploy surface, so switch only when needed.
-		deployCommand = "gcloud beta run deploy"
-	}
-
-	parts := []string{
-		deployCommand, shellQuote(service.Name),
-		"--project", shellQuote(cfg.ProjectID),
-		"--region", shellQuote(cfg.Region),
-		"--platform", "managed",
-		"--image", shellQuote(service.Image),
-		"--port", strconv.Itoa(service.Port),
-		"--cpu", shellQuote(service.CPU),
-		"--memory", shellQuote(service.Memory),
-		"--concurrency", strconv.Itoa(service.Concurrency),
-		"--min-instances", strconv.Itoa(service.MinInstances),
-		"--max-instances", strconv.Itoa(service.MaxInstances),
-		"--timeout", shellQuote(service.Timeout),
-		"--execution-environment", shellQuote(service.ExecutionEnvironment),
-		"--ingress", shellQuote(service.Ingress),
-	}
-
-	if service.Command != "" {
-		parts = append(parts, "--command", shellQuote(service.Command))
-	}
-
-	if len(service.Args) > 0 {
-		parts = append(parts, "--args", shellQuote(strings.Join(service.Args, ",")))
-	}
-
-	if service.ServiceAccount != "" {
-		parts = append(parts, "--service-account", shellQuote(service.ServiceAccount))
-	}
-
-	if service.RevisionSuffix != "" {
-		parts = append(parts, "--revision-suffix", shellQuote(service.RevisionSuffix))
-	}
-
-	if service.AllowUnauthenticated != nil {
-		if *service.AllowUnauthenticated {
-			parts = append(parts, "--allow-unauthenticated")
-		} else {
-			parts = append(parts, "--no-allow-unauthenticated")
-		}
-	}
-
-	if service.UseHTTP2 != nil {
-		if *service.UseHTTP2 {
-			parts = append(parts, "--use-http2")
-		} else {
-			parts = append(parts, "--no-use-http2")
-		}
-	}
-
-	if service.CPUThrottling != nil {
-		if *service.CPUThrottling {
-			parts = append(parts, "--cpu-throttling")
-		} else {
-			parts = append(parts, "--no-cpu-throttling")
-		}
-	}
-
-	if service.StartupCPUBoost != nil {
-		if *service.StartupCPUBoost {
-			parts = append(parts, "--startup-cpu-boost")
-		} else {
-			parts = append(parts, "--no-startup-cpu-boost")
-		}
-	}
-
-	if service.NoTraffic {
-		parts = append(parts, "--no-traffic")
-	}
-
-	if service.VPCConnector != "" {
-		parts = append(parts, "--vpc-connector", shellQuote(service.VPCConnector))
-	}
-
-	if service.VPCEgress != "" {
-		parts = append(parts, "--vpc-egress", shellQuote(service.VPCEgress))
-	}
-
-	if len(service.CloudSQLInstances) > 0 {
-		parts = append(parts, "--add-cloudsql-instances", shellQuote(strings.Join(service.CloudSQLInstances, ",")))
-	}
-
-	if len(service.Secrets) > 0 {
-		// Secrets are rendered as Cloud Run env-var bindings so the recipe stays stateless.
-		values := make([]string, 0, len(service.Secrets))
-		for _, secret := range service.SortedSecrets() {
-			version := secret.Version
-			if version == "" {
-				version = "latest"
-			}
-			values = append(values, fmt.Sprintf("%s=%s:%s", secret.Target, secret.Secret, version))
-		}
-		parts = append(parts, "--update-secrets", shellQuote(strings.Join(values, ",")))
-	}
-
-	if len(service.Env) > 0 {
-		values := make([]string, 0, len(service.Env))
-		for _, key := range service.SortedEnvKeys() {
-			values = append(values, fmt.Sprintf("%s=%s", key, service.Env[key]))
-		}
-		parts = append(parts, "--set-env-vars", shellQuote(strings.Join(values, ",")))
-	}
-
-	if len(service.Labels) > 0 {
-		values := make([]string, 0, len(service.Labels))
-		for _, key := range service.SortedLabelKeys() {
-			values = append(values, fmt.Sprintf("%s=%s", key, service.Labels[key]))
-		}
-		parts = append(parts, "--labels", shellQuote(strings.Join(values, ",")))
-	}
-
-	if len(service.Annotations) > 0 {
-		values := make([]string, 0, len(service.Annotations))
-		for _, key := range service.SortedAnnotationKeys() {
-			values = append(values, fmt.Sprintf("%s=%s", key, service.Annotations[key]))
-		}
-		parts = append(parts, "--update-annotations", shellQuote(strings.Join(values, ",")))
-	}
-
+	parts := deployBaseCommand(cfg, service)
+	parts = appendStringFlag(parts, "--command", service.Command)
+	parts = appendJoinedFlag(parts, "--args", service.Args)
+	parts = appendStringFlag(parts, "--service-account", service.ServiceAccount)
+	parts = appendStringFlag(parts, "--revision-suffix", service.RevisionSuffix)
+	parts = appendToggleFlag(parts, service.AllowUnauthenticated, "--allow-unauthenticated", "--no-allow-unauthenticated")
+	parts = appendToggleFlag(parts, service.UseHTTP2, "--use-http2", "--no-use-http2")
+	parts = appendToggleFlag(parts, service.CPUThrottling, "--cpu-throttling", "--no-cpu-throttling")
+	parts = appendToggleFlag(parts, service.StartupCPUBoost, "--startup-cpu-boost", "--no-startup-cpu-boost")
+	parts = appendFlagIf(parts, service.NoTraffic, "--no-traffic")
+	parts = appendStringFlag(parts, "--vpc-connector", service.VPCConnector)
+	parts = appendStringFlag(parts, "--vpc-egress", service.VPCEgress)
+	parts = appendJoinedFlag(parts, "--add-cloudsql-instances", service.CloudSQLInstances)
+	parts = appendSecretsFlag(parts, service)
+	parts = appendKeyValueFlag(parts, "--set-env-vars", service.SortedEnvKeys(), service.Env)
+	parts = appendKeyValueFlag(parts, "--labels", service.SortedLabelKeys(), service.Labels)
+	parts = appendKeyValueFlag(parts, "--update-annotations", service.SortedAnnotationKeys(), service.Annotations)
 	parts = appendProbeFlags(parts, "startup", service.StartupProbe)
 	parts = appendProbeFlags(parts, "liveness", service.LivenessProbe)
 
@@ -325,6 +218,90 @@ func appendProbeFlags(parts []string, prefix string, probe *Probe) []string {
 		parts = append(parts, fmt.Sprintf("--%s-probe-success-threshold", prefix), strconv.Itoa(probe.SuccessThreshold))
 	}
 	return parts
+}
+
+func deployBaseCommand(cfg Config, service Service) []string {
+	return []string{
+		deploySurface(service), shellQuote(service.Name),
+		"--project", shellQuote(cfg.ProjectID),
+		"--region", shellQuote(cfg.Region),
+		"--platform", "managed",
+		"--image", shellQuote(service.Image),
+		"--port", strconv.Itoa(service.Port),
+		"--cpu", shellQuote(service.CPU),
+		"--memory", shellQuote(service.Memory),
+		"--concurrency", strconv.Itoa(service.Concurrency),
+		"--min-instances", strconv.Itoa(service.MinInstances),
+		"--max-instances", strconv.Itoa(service.MaxInstances),
+		"--timeout", shellQuote(service.Timeout),
+		"--execution-environment", shellQuote(service.ExecutionEnvironment),
+		"--ingress", shellQuote(service.Ingress),
+	}
+}
+
+func deploySurface(service Service) string {
+	if service.StartupProbe != nil || service.LivenessProbe != nil {
+		// Probe flags currently live on the beta deploy surface, so switch only when needed.
+		return "gcloud beta run deploy"
+	}
+	return "gcloud run deploy"
+}
+
+func appendStringFlag(parts []string, flag string, value string) []string {
+	if value == "" {
+		return parts
+	}
+	return append(parts, flag, shellQuote(value))
+}
+
+func appendJoinedFlag(parts []string, flag string, values []string) []string {
+	if len(values) == 0 {
+		return parts
+	}
+	return append(parts, flag, shellQuote(strings.Join(values, ",")))
+}
+
+func appendToggleFlag(parts []string, value *bool, enabledFlag string, disabledFlag string) []string {
+	if value == nil {
+		return parts
+	}
+	if *value {
+		return append(parts, enabledFlag)
+	}
+	return append(parts, disabledFlag)
+}
+
+func appendFlagIf(parts []string, include bool, flag string) []string {
+	if !include {
+		return parts
+	}
+	return append(parts, flag)
+}
+
+func appendSecretsFlag(parts []string, service Service) []string {
+	if len(service.Secrets) == 0 {
+		return parts
+	}
+
+	// Secrets are rendered as Cloud Run env-var bindings so the recipe stays stateless.
+	values := make([]string, 0, len(service.Secrets))
+	for _, secret := range service.SortedSecrets() {
+		version := defaultTrimmed(secret.Version, "latest")
+		values = append(values, fmt.Sprintf("%s=%s:%s", secret.Target, secret.Secret, version))
+	}
+	return append(parts, "--update-secrets", shellQuote(strings.Join(values, ",")))
+}
+
+func appendKeyValueFlag(parts []string, flag string, keys []string, values map[string]string) []string {
+	if len(keys) == 0 {
+		return parts
+	}
+
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", key, values[key]))
+	}
+	return append(parts, flag, shellQuote(strings.Join(pairs, ",")))
 }
 
 func appendCmdState(builder *strings.Builder, title string, command string, env []string, timeout string) {
