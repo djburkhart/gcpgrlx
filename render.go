@@ -1,11 +1,14 @@
 package gcpgrlx
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"text/template"
 )
 
 type planStep struct {
@@ -13,6 +16,31 @@ type planStep struct {
 	Kind    string
 	Target  string
 	Command string
+	Timeout string
+}
+
+type caddyRoute struct {
+	Service  Service
+	Path     string
+	Matcher  string
+	Upstream string
+	Imports  []string
+}
+
+type caddyTemplateData struct {
+	Config   Config
+	Domains  []caddyDomain
+	Snippets []caddySnippet
+}
+
+type caddyDomain struct {
+	Name   string
+	Routes []caddyRoute
+}
+
+type caddySnippet struct {
+	Name string
+	Body string
 }
 
 func RenderRecipe(cfg Config) (string, error) {
@@ -34,7 +62,7 @@ func RenderRecipe(cfg Config) (string, error) {
 		case "command":
 			appendCmdState(&builder, step.Title, step.Command, []string{
 				"CLOUDSDK_CORE_DISABLE_PROMPTS=1",
-			}, planStepTimeout(step.Title))
+			}, effectivePlanStepTimeout(step))
 		default:
 			return "", fmt.Errorf("unsupported plan step kind: %s", step.Kind)
 		}
@@ -72,14 +100,124 @@ func WriteRecipeFile(cfg Config, outDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", fmt.Errorf("create output directory: %w", err)
+	return writeRenderedFile(outDir, "deploy.grlx", []byte(recipe), "write recipe")
+}
+
+func RenderCaddyfile(cfg Config) (string, error) {
+	return renderCaddyfile(cfg, defaultCaddyUpstreamResolver)
+}
+
+func renderCaddyfile(cfg Config, resolveUpstream func(Config, Service) string) (string, error) {
+	cfg.setDefaults()
+	if err := cfg.Validate(); err != nil {
+		return "", err
 	}
-	path := filepath.Join(outDir, "deploy.grlx")
-	if err := os.WriteFile(path, []byte(recipe), 0o644); err != nil {
-		return "", fmt.Errorf("write recipe: %w", err)
+	if !cfg.caddyEnabled() {
+		return "", fmt.Errorf("caddy generation is disabled; set caddy.enabled to true")
 	}
-	return path, nil
+
+	templateData := buildCaddyTemplateData(cfg, resolveUpstream)
+	if len(templateData.Domains) == 0 {
+		return "", fmt.Errorf("caddy generation is enabled but no services define a caddy block")
+	}
+
+	if strings.TrimSpace(cfg.Caddy.Template) != "" {
+		return renderCustomCaddyTemplate(cfg.Caddy.Template, templateData)
+	}
+
+	return renderDefaultCaddyfile(templateData), nil
+}
+
+func WriteCaddyFile(cfg Config, outDir string) (string, error) {
+	rendered, err := RenderCaddyfile(cfg)
+	if err != nil {
+		return "", err
+	}
+	return writeRenderedFile(outDir, caddyOutputFile(cfg), []byte(rendered), "write caddyfile")
+}
+
+func renderDefaultCaddyfile(data caddyTemplateData) string {
+	var builder strings.Builder
+	appendCaddySnippets(&builder, data.Snippets)
+	for index, domain := range data.Domains {
+		if index > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(domain.Name)
+		builder.WriteString(" {\n")
+		for _, route := range domain.Routes {
+			appendCaddyRoute(&builder, route)
+		}
+		builder.WriteString("}\n")
+	}
+
+	return builder.String()
+}
+
+func renderCustomCaddyTemplate(rawTemplate string, data caddyTemplateData) (string, error) {
+	tpl, err := template.New("caddyfile").Funcs(template.FuncMap{
+		"join":   strings.Join,
+		"indent": indentBlock,
+		"quote":  strconv.Quote,
+		"trim":   strings.TrimSpace,
+	}).Parse(rawTemplate)
+	if err != nil {
+		return "", fmt.Errorf("parse caddy template: %w", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := tpl.Execute(&buffer, data); err != nil {
+		return "", fmt.Errorf("render caddy template: %w", err)
+	}
+	return buffer.String(), nil
+}
+
+func renderLiveCaddyPatchCommand(cfg Config) (string, error) {
+	templateData := buildCaddyTemplateData(cfg, liveCaddyUpstreamResolver)
+	rendered, err := renderCaddyfile(cfg, liveCaddyUpstreamResolver)
+	if err != nil {
+		return "", err
+	}
+	variables := buildCaddyRuntimeVariables(templateData)
+
+	var script strings.Builder
+	script.WriteString("set -euo pipefail\n")
+	script.WriteString("mkdir -p ")
+	script.WriteString(shellQuote(pathDir(caddyDeploymentPath(cfg))))
+	script.WriteString("\n")
+	for _, variable := range variables {
+		script.WriteString(variable.Name)
+		script.WriteString("=\"$(gcloud run services describe ")
+		script.WriteString(shellQuote(variable.Service.Name))
+		script.WriteString(" --project ")
+		script.WriteString(shellQuote(cfg.ProjectID))
+		script.WriteString(" --region ")
+		script.WriteString(shellQuote(cfg.Region))
+		script.WriteString(" --format=")
+		script.WriteString(shellQuote("value(status.url)"))
+		script.WriteString(")\"\n")
+		script.WriteString("if [ -z \"${")
+		script.WriteString(variable.Name)
+		script.WriteString("}\" ]; then echo ")
+		script.WriteString(shellQuote(fmt.Sprintf("missing Cloud Run URL for %s", variable.Service.Name)))
+		script.WriteString(" >&2; exit 1; fi\n")
+	}
+	script.WriteString("cat > ")
+	script.WriteString(shellQuote(caddyDeploymentPath(cfg)))
+	script.WriteString(" <<'__GCPGRLX_CADDYFILE__'\n")
+	script.WriteString(rendered)
+	if !strings.HasSuffix(rendered, "\n") {
+		script.WriteString("\n")
+	}
+	script.WriteString("__GCPGRLX_CADDYFILE__\n")
+	for _, variable := range variables {
+		script.WriteString("sed -i ")
+		script.WriteString(fmt.Sprintf("\"s|%s|${%s}|g\"", variable.Placeholder, variable.Name))
+		script.WriteString(" ")
+		script.WriteString(shellQuote(caddyDeploymentPath(cfg)))
+		script.WriteString("\n")
+	}
+	return "bash -lc " + shellQuote(script.String()), nil
 }
 
 func buildPlanSteps(cfg Config) []planStep {
@@ -111,6 +249,21 @@ func buildPlanSteps(cfg Config) []planStep {
 
 	// Each service becomes one deploy step, plus an optional traffic step when rollout control is requested.
 	for _, service := range cfg.Services {
+		if service.IsJobProfile() {
+			steps = append(steps, planStep{
+				Title:   fmt.Sprintf("Deploy %s", service.Name),
+				Kind:    "command",
+				Command: renderJobDeployCommand(cfg, service),
+			})
+			if service.IsCronProfile() {
+				steps = append(steps, planStep{
+					Title:   fmt.Sprintf("Schedule %s", service.Name),
+					Kind:    "command",
+					Command: renderCronScheduleCommand(cfg, service),
+				})
+			}
+			continue
+		}
 		steps = append(steps, planStep{
 			Title:   fmt.Sprintf("Deploy %s", service.Name),
 			Kind:    "command",
@@ -125,15 +278,357 @@ func buildPlanSteps(cfg Config) []planStep {
 		}
 	}
 
+	if cfg.caddyEnabled() {
+		steps = append(steps, planStep{
+			Title:  "Ensure Caddy output directory exists",
+			Kind:   "directory",
+			Target: pathDir(caddyDeploymentPath(cfg)),
+		})
+		steps = append(steps, planStep{
+			Title:   "Install Caddy",
+			Kind:    "command",
+			Command: renderInstallCaddyCommand(),
+		})
+		if command, err := renderLiveCaddyPatchCommand(cfg); err == nil {
+			steps = append(steps, planStep{
+				Title:   "Patch live Caddyfile",
+				Kind:    "command",
+				Command: command,
+			})
+		}
+		steps = append(steps,
+			planStep{
+				Title:   "Apply Caddyfile",
+				Kind:    "command",
+				Command: renderApplyCaddyCommand(cfg),
+			},
+			planStep{
+				Title:   "Validate Caddy config",
+				Kind:    "command",
+				Command: renderValidateCaddyCommand(),
+			},
+			planStep{
+				Title:   "Reload Caddy",
+				Kind:    "command",
+				Command: renderReloadCaddyCommand(),
+			},
+		)
+	}
+
+	for _, test := range cfg.SmokeTests {
+		steps = append(steps, planStep{
+			Title:   fmt.Sprintf("Smoke test %s", test.Name),
+			Kind:    "command",
+			Command: renderSmokeTestCommand(cfg, test),
+			Timeout: test.Timeout,
+		})
+	}
+
 	return steps
+}
+
+func pathDir(path string) string {
+	index := strings.LastIndex(path, "/")
+	if index <= 0 {
+		return "/"
+	}
+	return path[:index]
+}
+
+func renderInstallCaddyCommand() string {
+	var script strings.Builder
+	script.WriteString("set -euo pipefail\n")
+	script.WriteString("if command -v caddy >/dev/null 2>&1; then\n")
+	script.WriteString("    caddy version\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("if command -v apt-get >/dev/null 2>&1; then\n")
+	script.WriteString("    apt-get update\n")
+	script.WriteString("    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg\n")
+	script.WriteString("    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg\n")
+	script.WriteString("    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list\n")
+	script.WriteString("    chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list\n")
+	script.WriteString("    apt-get update\n")
+	script.WriteString("    apt-get install -y caddy\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("if command -v dnf >/dev/null 2>&1; then\n")
+	script.WriteString("    dnf install -y dnf5-plugins || dnf install -y dnf-plugins-core\n")
+	script.WriteString("    dnf -y copr enable @caddy/caddy\n")
+	script.WriteString("    dnf install -y caddy\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("if command -v pacman >/dev/null 2>&1; then\n")
+	script.WriteString("    pacman -Syu --noconfirm caddy\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("echo 'unsupported package manager for automatic Caddy installation' >&2\n")
+	script.WriteString("exit 1\n")
+	return "bash -lc " + shellQuote(script.String())
+}
+
+func renderApplyCaddyCommand(cfg Config) string {
+	command := fmt.Sprintf(
+		"install -D -m 0644 %s %s",
+		shellQuote(caddyDeploymentPath(cfg)),
+		shellQuote(caddySystemConfigPath()),
+	)
+	return "bash -lc " + shellQuote(command)
+}
+
+func renderValidateCaddyCommand() string {
+	return strings.Join([]string{
+		"caddy", "validate",
+		"--config", shellQuote(caddySystemConfigPath()),
+	}, " ")
+}
+
+func renderReloadCaddyCommand() string {
+	var script strings.Builder
+	script.WriteString("set -euo pipefail\n")
+	script.WriteString("if command -v systemctl >/dev/null 2>&1; then\n")
+	script.WriteString("    systemctl enable --now caddy\n")
+	script.WriteString("    systemctl reload caddy || systemctl restart caddy\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("if command -v service >/dev/null 2>&1; then\n")
+	script.WriteString("    service caddy restart || service caddy start\n")
+	script.WriteString("    exit 0\n")
+	script.WriteString("fi\n")
+	script.WriteString("caddy reload --config ")
+	script.WriteString(shellQuote(caddySystemConfigPath()))
+	script.WriteString(" || caddy start --config ")
+	script.WriteString(shellQuote(caddySystemConfigPath()))
+	script.WriteString("\n")
+	return "bash -lc " + shellQuote(script.String())
+}
+
+func caddySystemConfigPath() string {
+	return "/etc/caddy/Caddyfile"
+}
+
+func renderSmokeTestCommand(cfg Config, test SmokeTest) string {
+	if test.Type == "command" {
+		return test.Command
+	}
+
+	var script strings.Builder
+	script.WriteString("set -euo pipefail\n")
+	script.WriteString("target=")
+	script.WriteString(shellQuote(smokeTestTargetBaseURL(cfg, test)))
+	script.WriteString("\n")
+	if strings.TrimSpace(test.URL) == "" && strings.TrimSpace(test.Service) != "" && !smokeTestUsesCaddyRoute(cfg, test) {
+		script.WriteString("target=\"$(gcloud run services describe ")
+		script.WriteString(shellQuote(test.Service))
+		script.WriteString(" --project ")
+		script.WriteString(shellQuote(cfg.ProjectID))
+		script.WriteString(" --region ")
+		script.WriteString(shellQuote(cfg.Region))
+		script.WriteString(" --format=")
+		script.WriteString(shellQuote("value(status.url)"))
+		script.WriteString(")\"\n")
+	}
+	script.WriteString("if [ -z \"$target\" ]; then echo ")
+	script.WriteString(shellQuote(fmt.Sprintf("missing smoke test target for %s", test.Name)))
+	script.WriteString(" >&2; exit 1; fi\n")
+	script.WriteString("request_url=\"$target")
+	script.WriteString(smokeTestPathForRender(cfg, test))
+	script.WriteString("\"\n")
+	script.WriteString("tmp=\"$(mktemp)\"\n")
+	script.WriteString("trap 'rm -f \"$tmp\"' EXIT\n")
+	script.WriteString("status=\"$(curl -sS -o \"$tmp\" -w \"%{http_code}\" ")
+	script.WriteString(smokeTestCurlFlags(test))
+	script.WriteString(" \"$request_url\")\"\n")
+	script.WriteString("if [ \"$status\" != ")
+	script.WriteString(shellQuote(strconv.Itoa(test.ExpectedStatus)))
+	script.WriteString(" ]; then echo ")
+	script.WriteString(shellQuote(fmt.Sprintf("smoke test %s expected HTTP %d", test.Name, test.ExpectedStatus)))
+	script.WriteString(" >&2; cat \"$tmp\" >&2; exit 1; fi\n")
+	if strings.TrimSpace(test.BodyContains) != "" {
+		script.WriteString("grep -Fq -- ")
+		script.WriteString(shellQuote(test.BodyContains))
+		script.WriteString(" \"$tmp\" || { echo ")
+		script.WriteString(shellQuote(fmt.Sprintf("smoke test %s missing expected body text", test.Name)))
+		script.WriteString(" >&2; cat \"$tmp\" >&2; exit 1; }\n")
+	}
+	return "bash -lc " + shellQuote(script.String())
+}
+
+func smokeTestUsesCaddyRoute(cfg Config, test SmokeTest) bool {
+	if strings.TrimSpace(test.Service) == "" || !cfg.caddyEnabled() {
+		return false
+	}
+	service, ok := cfg.ServiceByName(test.Service)
+	return ok && service.Caddy != nil
+}
+
+func smokeTestTargetBaseURL(cfg Config, test SmokeTest) string {
+	if strings.TrimSpace(test.URL) != "" {
+		return strings.TrimRight(strings.TrimSpace(test.URL), "/")
+	}
+	if !smokeTestUsesCaddyRoute(cfg, test) {
+		return ""
+	}
+	service, _ := cfg.ServiceByName(test.Service)
+	return "https://" + strings.TrimSpace(service.Caddy.Domain)
+}
+
+func smokeTestRequestURL(cfg Config, test SmokeTest) string {
+	return smokeTestTargetBaseURL(cfg, test) + smokeTestPathForRender(cfg, test)
+}
+
+func smokeTestPathForRender(cfg Config, test SmokeTest) string {
+	path := defaultSmokeTestPath(cfg, test)
+	if path == "/" {
+		return ""
+	}
+	return path
+}
+
+func smokeTestCurlFlags(test SmokeTest) string {
+	parts := []string{"-X", shellQuote(test.Method)}
+	if test.SkipTLSVerify {
+		parts = append(parts, "-k")
+	}
+	for _, key := range sortedStringKeys(test.Headers) {
+		parts = append(parts, "-H", shellQuote(fmt.Sprintf("%s: %s", key, test.Headers[key])))
+	}
+	return strings.Join(parts, " ")
+}
+
+func sortedStringKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+type caddyRuntimeVariable struct {
+	Name        string
+	Placeholder string
+	Service     Service
+}
+
+func buildCaddyRuntimeVariables(data caddyTemplateData) []caddyRuntimeVariable {
+	variables := []caddyRuntimeVariable{}
+	seen := map[string]struct{}{}
+	for _, domain := range data.Domains {
+		for _, route := range domain.Routes {
+			if route.Service.Caddy != nil && strings.TrimSpace(route.Service.Caddy.Upstream) != "" {
+				continue
+			}
+			name := caddyRuntimeVariableName(route.Service.Name)
+			if _, exists := seen[name]; exists {
+				continue
+			}
+			seen[name] = struct{}{}
+			variables = append(variables, caddyRuntimeVariable{
+				Name:        name,
+				Placeholder: liveCaddyPlaceholder(route.Service.Name),
+				Service:     route.Service,
+			})
+		}
+	}
+	sort.Slice(variables, func(i int, j int) bool {
+		return variables[i].Name < variables[j].Name
+	})
+	return variables
+}
+
+func caddyRuntimeVariableName(serviceName string) string {
+	return strings.ReplaceAll(serviceName, "-", "_") + "_url"
+}
+
+func liveCaddyPlaceholder(serviceName string) string {
+	return "__GCPGRLX_UPSTREAM_" + strings.ToUpper(strings.ReplaceAll(serviceName, "-", "_")) + "__"
+}
+
+func defaultCaddyUpstreamResolver(cfg Config, service Service) string {
+	return caddyUpstream(cfg, service)
+}
+
+func liveCaddyUpstreamResolver(_ Config, service Service) string {
+	if service.Caddy != nil && strings.TrimSpace(service.Caddy.Upstream) != "" {
+		return strings.TrimSpace(service.Caddy.Upstream)
+	}
+	return liveCaddyPlaceholder(service.Name)
+}
+
+func buildCaddyTemplateData(cfg Config, resolveUpstream func(Config, Service) string) caddyTemplateData {
+	routesByDomain := buildCaddyRoutes(cfg, resolveUpstream)
+	if len(routesByDomain) == 0 {
+		return caddyTemplateData{}
+	}
+
+	domains := make([]caddyDomain, 0, len(routesByDomain))
+	for _, domain := range sortedCaddyDomains(routesByDomain) {
+		domains = append(domains, caddyDomain{
+			Name:   domain,
+			Routes: routesByDomain[domain],
+		})
+	}
+	snippets := make([]caddySnippet, 0, len(cfg.SortedCaddySnippetNames()))
+	for _, name := range cfg.SortedCaddySnippetNames() {
+		snippets = append(snippets, caddySnippet{
+			Name: name,
+			Body: caddyImportBody(cfg, name),
+		})
+	}
+	return caddyTemplateData{
+		Config:   cfg,
+		Domains:  domains,
+		Snippets: snippets,
+	}
+}
+
+func caddyImportBody(cfg Config, name string) string {
+	if cfg.Caddy != nil {
+		if body, exists := cfg.Caddy.Snippets[name]; exists {
+			return body
+		}
+	}
+	return caddyMiddlewarePresets()[name]
+}
+
+func writeRenderedFile(outDir string, name string, raw []byte, action string) (string, error) {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", fmt.Errorf("create output directory: %w", err)
+	}
+	path := filepath.Join(outDir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create output directory: %w", err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return "", fmt.Errorf("%s: %w", action, err)
+	}
+	return path, nil
+}
+
+func effectivePlanStepTimeout(step planStep) string {
+	if strings.TrimSpace(step.Timeout) != "" {
+		return step.Timeout
+	}
+	return planStepTimeout(step.Title)
 }
 
 func planStepTimeout(title string) string {
 	switch {
 	case strings.HasPrefix(title, "Verify gcloud"):
 		return "2m"
+	case strings.HasPrefix(title, "Schedule "):
+		return "10m"
 	case strings.HasPrefix(title, "Update traffic"):
 		return "10m"
+	case strings.HasPrefix(title, "Patch live Caddyfile"):
+		return "10m"
+	case strings.HasPrefix(title, "Install Caddy"):
+		return "15m"
+	case strings.HasPrefix(title, "Validate Caddy config"):
+		return "2m"
+	case strings.HasPrefix(title, "Reload Caddy"):
+		return "5m"
 	case strings.HasPrefix(title, "Deploy "):
 		return "30m"
 	default:
@@ -163,6 +658,64 @@ func renderDeployCommand(cfg Config, service Service) string {
 	parts = appendProbeFlags(parts, "liveness", service.LivenessProbe)
 
 	return strings.Join(parts, " ")
+}
+
+func renderJobDeployCommand(cfg Config, service Service) string {
+	parts := jobBaseCommand(cfg, service)
+	parts = appendStringFlag(parts, "--command", service.Command)
+	parts = appendJoinedFlag(parts, "--args", service.Args)
+	parts = appendStringFlag(parts, "--service-account", service.ServiceAccount)
+	parts = appendStringFlag(parts, "--vpc-connector", service.VPCConnector)
+	parts = appendStringFlag(parts, "--vpc-egress", service.VPCEgress)
+	parts = appendJoinedFlag(parts, "--add-cloudsql-instances", service.CloudSQLInstances)
+	parts = appendSecretsFlag(parts, service)
+	parts = appendKeyValueFlag(parts, "--set-env-vars", service.SortedEnvKeys(), service.Env)
+	parts = appendKeyValueFlag(parts, "--labels", service.SortedLabelKeys(), service.Labels)
+	return strings.Join(parts, " ")
+}
+
+func renderCronScheduleCommand(cfg Config, service Service) string {
+	cron := service.Cron
+	uri := fmt.Sprintf(
+		"https://run.googleapis.com/v2/projects/%s/locations/%s/jobs/%s:run",
+		cfg.ProjectID,
+		cfg.Region,
+		service.Name,
+	)
+	createCommand := strings.Join([]string{
+		"gcloud", "scheduler", "jobs", "create", "http", shellQuote(cron.JobName),
+		"--location", shellQuote(cfg.Region),
+		"--project", shellQuote(cfg.ProjectID),
+		"--schedule", shellQuote(cron.Schedule),
+		"--time-zone", shellQuote(cron.TimeZone),
+		"--uri", shellQuote(uri),
+		"--http-method", "POST",
+		"--oauth-service-account-email", shellQuote(cron.ServiceAccount),
+		"--oauth-token-scope", shellQuote("https://www.googleapis.com/auth/cloud-platform"),
+	}, " ")
+	updateCommand := strings.Join([]string{
+		"gcloud", "scheduler", "jobs", "update", "http", shellQuote(cron.JobName),
+		"--location", shellQuote(cfg.Region),
+		"--project", shellQuote(cfg.ProjectID),
+		"--schedule", shellQuote(cron.Schedule),
+		"--time-zone", shellQuote(cron.TimeZone),
+		"--uri", shellQuote(uri),
+		"--http-method", "POST",
+		"--oauth-service-account-email", shellQuote(cron.ServiceAccount),
+		"--oauth-token-scope", shellQuote("https://www.googleapis.com/auth/cloud-platform"),
+	}, " ")
+	var script strings.Builder
+	script.WriteString("gcloud scheduler jobs describe ")
+	script.WriteString(shellQuote(cron.JobName))
+	script.WriteString(" --location ")
+	script.WriteString(shellQuote(cfg.Region))
+	script.WriteString(" --project ")
+	script.WriteString(shellQuote(cfg.ProjectID))
+	script.WriteString(" >/dev/null 2>&1 && ")
+	script.WriteString(updateCommand)
+	script.WriteString(" || ")
+	script.WriteString(createCommand)
+	return "bash -lc " + shellQuote(script.String())
 }
 
 func renderTrafficCommand(cfg Config, service Service) string {
@@ -239,6 +792,21 @@ func deployBaseCommand(cfg Config, service Service) []string {
 	}
 }
 
+func jobBaseCommand(cfg Config, service Service) []string {
+	return []string{
+		"gcloud", "run", "jobs", "deploy", shellQuote(service.Name),
+		"--project", shellQuote(cfg.ProjectID),
+		"--region", shellQuote(cfg.Region),
+		"--image", shellQuote(service.Image),
+		"--cpu", shellQuote(service.CPU),
+		"--memory", shellQuote(service.Memory),
+		"--tasks", strconv.Itoa(service.Tasks),
+		"--parallelism", strconv.Itoa(service.Parallelism),
+		"--max-retries", strconv.Itoa(service.MaxRetries),
+		"--task-timeout", shellQuote(service.Timeout),
+	}
+}
+
 func deploySurface(service Service) string {
 	if service.StartupProbe != nil || service.LivenessProbe != nil {
 		// Probe flags currently live on the beta deploy surface, so switch only when needed.
@@ -302,6 +870,142 @@ func appendKeyValueFlag(parts []string, flag string, keys []string, values map[s
 		pairs = append(pairs, fmt.Sprintf("%s=%s", key, values[key]))
 	}
 	return append(parts, flag, shellQuote(strings.Join(pairs, ",")))
+}
+
+func buildCaddyRoutes(cfg Config, resolveUpstream func(Config, Service) string) map[string][]caddyRoute {
+	routesByDomain := map[string][]caddyRoute{}
+	for _, service := range cfg.Services {
+		if service.Caddy == nil {
+			continue
+		}
+		domain := strings.TrimSpace(service.Caddy.Domain)
+		routesByDomain[domain] = append(routesByDomain[domain], caddyRoute{
+			Service:  service,
+			Path:     caddyRoutePath(service.Caddy.Path),
+			Matcher:  caddyPathMatcher(service.Caddy.Path),
+			Upstream: resolveUpstream(cfg, service),
+			Imports:  service.CaddySnippetRefs(),
+		})
+	}
+
+	for domain, routes := range routesByDomain {
+		sort.Slice(routes, func(i int, j int) bool {
+			if routes[i].Path == "/" {
+				return false
+			}
+			if routes[j].Path == "/" {
+				return true
+			}
+			return routes[i].Path < routes[j].Path
+		})
+		routesByDomain[domain] = routes
+	}
+	return routesByDomain
+}
+
+func sortedCaddyDomains(routesByDomain map[string][]caddyRoute) []string {
+	domains := make([]string, 0, len(routesByDomain))
+	for domain := range routesByDomain {
+		domains = append(domains, domain)
+	}
+	sort.Strings(domains)
+	return domains
+}
+
+func appendCaddyRoute(builder *strings.Builder, route caddyRoute) {
+	if route.Path == "/" {
+		builder.WriteString("    handle {\n")
+		appendCaddyImports(builder, route, "        ")
+		builder.WriteString("        reverse_proxy ")
+		builder.WriteString(route.Upstream)
+		builder.WriteString("\n")
+		appendCaddyHeadersIndented(builder, route.Service, "        ")
+		builder.WriteString("    }\n")
+		return
+	}
+
+	builder.WriteString("    handle_path ")
+	builder.WriteString(route.Matcher)
+	builder.WriteString(" {\n")
+	appendCaddyImports(builder, route, "        ")
+	builder.WriteString("        reverse_proxy ")
+	builder.WriteString(route.Upstream)
+	builder.WriteString("\n")
+	appendCaddyHeadersIndented(builder, route.Service, "        ")
+	builder.WriteString("    }\n")
+}
+
+func appendCaddySnippets(builder *strings.Builder, snippets []caddySnippet) {
+	for _, snippet := range snippets {
+		builder.WriteString("(")
+		builder.WriteString(snippet.Name)
+		builder.WriteString(") {\n")
+		builder.WriteString(indentBlock(snippet.Body, "    "))
+		if !strings.HasSuffix(snippet.Body, "\n") {
+			builder.WriteString("\n")
+		}
+		builder.WriteString("}\n\n")
+	}
+}
+
+func appendCaddyImports(builder *strings.Builder, route caddyRoute, indent string) {
+	for _, snippet := range route.Imports {
+		builder.WriteString(indent)
+		builder.WriteString("import ")
+		builder.WriteString(snippet)
+		builder.WriteString("\n")
+	}
+}
+
+func appendCaddyHeaders(builder *strings.Builder, service Service) {
+	appendCaddyHeadersIndented(builder, service, "    ")
+}
+
+func appendCaddyHeadersIndented(builder *strings.Builder, service Service, indent string) {
+	if service.Caddy == nil || len(service.Caddy.Headers) == 0 {
+		return
+	}
+	builder.WriteString(indent)
+	builder.WriteString("header {\n")
+	for _, key := range service.SortedCaddyHeaderKeys() {
+		builder.WriteString(indent)
+		builder.WriteString("    ")
+		builder.WriteString(key)
+		builder.WriteString(" ")
+		builder.WriteString(shellQuote(service.Caddy.Headers[key]))
+		builder.WriteString("\n")
+	}
+	builder.WriteString(indent)
+	builder.WriteString("}\n")
+}
+
+func caddyPathMatcher(path string) string {
+	if path == "/" {
+		return "/"
+	}
+	trimmed := "/" + strings.Trim(strings.TrimSpace(path), "/")
+	return trimmed + "/*"
+}
+
+func caddyUpstream(cfg Config, service Service) string {
+	if service.Caddy != nil && strings.TrimSpace(service.Caddy.Upstream) != "" {
+		return strings.TrimSpace(service.Caddy.Upstream)
+	}
+	return fmt.Sprintf("https://%s-%s.a.run.app", service.Name, cfg.Region)
+}
+
+func indentBlock(value string, prefix string) string {
+	if value == "" {
+		return ""
+	}
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		if line == "" && index == len(lines)-1 {
+			continue
+		}
+		lines[index] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func appendCmdState(builder *strings.Builder, title string, command string, env []string, timeout string) {

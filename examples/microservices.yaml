@@ -2,9 +2,33 @@ project_id: sample-platform-prod
 region: us-central1
 artifact_registry_repository: platform-services
 deployment_root: /var/lib/gcpgrlx/platform
+caddy:
+  enabled: true
+  file: caddy/Caddyfile
+  snippets:
+    common-security: |
+      encode zstd gzip
+      header X-Frame-Options DENY
+      header X-Content-Type-Options nosniff
+    grpc-transport: |
+      transport http {
+          versions h2c 2
+      }
 required_services:
   - artifactregistry.googleapis.com
   - run.googleapis.com
+  - cloudscheduler.googleapis.com
+smoke_tests:
+  - name: identity edge route
+    service: identity-grpc
+    path: /identity
+    method: GET
+    expected_status: 200
+    skip_tls_verify: true
+  - name: matching command smoke
+    type: command
+    command: bash -lc 'echo smoke test placeholder for matching-grpc'
+    timeout: 1m
 services:
   - name: identity-grpc
     protocol: grpc
@@ -39,6 +63,18 @@ services:
       type: grpc
       port: 50051
       failure_threshold: 3
+    caddy:
+      domain: api.sample-platform.dev
+      path: /identity
+      presets:
+        - compression
+        - security-headers
+        - no-store
+      snippets:
+        - common-security
+        - grpc-transport
+      headers:
+        Cache-Control: no-store
     env:
       APP_ENV: production
       GRPC_PORT: :50051
@@ -58,6 +94,15 @@ services:
     vpc_egress: private-ranges-only
     annotations:
       run.googleapis.com/launch-stage: BETA
+    caddy:
+      domain: api.sample-platform.dev
+      path: /matching
+      presets:
+        - compression
+        - security-headers
+      cohorts:
+        - common-security
+        - grpc-transport
     env:
       APP_ENV: production
       MATCH_PIPELINE: default
@@ -65,3 +110,44 @@ services:
       app: platform
       protocol: grpc
       tier: matching
+  - name: analytics-worker
+    profile: worker
+    command: /app/worker
+    args:
+      - run
+      - --queue
+      - analytics
+    service_account: analytics-worker@sample-platform-prod.iam.gserviceaccount.com
+    timeout: 1800s
+    tasks: 1
+    parallelism: 1
+    max_retries: 5
+    execution_environment: gen2
+    vpc_connector: projects/sample-platform-prod/locations/us-central1/connectors/core
+    vpc_egress: private-ranges-only
+    env:
+      APP_ENV: production
+      QUEUE_NAME: analytics
+    labels:
+      app: platform
+      tier: workers
+  - name: nightly-sync
+    profile: cron
+    command: /app/sync
+    args:
+      - nightly
+    service_account: nightly-sync@sample-platform-prod.iam.gserviceaccount.com
+    timeout: 1800s
+    tasks: 1
+    parallelism: 1
+    max_retries: 2
+    execution_environment: gen2
+    cron:
+      schedule: 0 3 * * *
+      time_zone: UTC
+      service_account: scheduler@sample-platform-prod.iam.gserviceaccount.com
+    env:
+      APP_ENV: production
+    labels:
+      app: platform
+      tier: cron

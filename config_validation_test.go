@@ -167,3 +167,268 @@ func TestValidateRejectsInvalidProbesAndSecrets(t *testing.T) {
 		t.Fatal("expected validation error for invalid secrets/probes")
 	}
 }
+
+func TestValidateRejectsInvalidCaddyConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			name: "service caddy without top level enablement",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Domain: "api.example.com",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "missing caddy domain",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Caddy:                      &Caddy{Enabled: true},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Path: "/identity",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "duplicate caddy route",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Caddy:                      &Caddy{Enabled: true},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Domain: "api.example.com",
+							Path:   "/identity",
+						},
+					},
+					{
+						Name:        "matching-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/matching-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Domain: "api.example.com",
+							Path:   "/identity",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "undefined caddy snippet",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Caddy:                      &Caddy{Enabled: true, Snippets: map[string]string{"common-security": "header X-Frame-Options DENY"}},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Domain:   "api.example.com",
+							Path:     "/identity",
+							Snippets: []string{"missing-snippet"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "undefined caddy preset",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Caddy:                      &Caddy{Enabled: true},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+						Caddy: &ServiceCaddy{
+							Domain:  "api.example.com",
+							Path:    "/identity",
+							Presets: []string{"unknown-preset"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "smoke test unknown service",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				SmokeTests: []SmokeTest{
+					{Name: "missing-service", Service: "does-not-exist"},
+				},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+					},
+				},
+			},
+		},
+		{
+			name: "command smoke test missing command",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				SmokeTests: []SmokeTest{
+					{Name: "bad-command", Type: "command"},
+				},
+				Services: []Service{
+					{
+						Name:        "identity-grpc",
+						Image:       "us-central1-docker.pkg.dev/sample/repo/identity-grpc:latest",
+						Protocol:    "grpc",
+						Port:        50051,
+						CPU:         "1",
+						Memory:      "512Mi",
+						Concurrency: 20,
+						Timeout:     "300s",
+						Ingress:     "internal",
+						UseHTTP2:    boolPtr(true),
+					},
+				},
+			},
+		},
+		{
+			name: "cron missing schedule",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				Services: []Service{
+					{
+						Name:           "nightly-sync",
+						Profile:        "cron",
+						Image:          "us-central1-docker.pkg.dev/sample/repo/nightly-sync:latest",
+						CPU:            "1",
+						Memory:         "512Mi",
+						Timeout:        "1800s",
+						Tasks:          1,
+						Parallelism:    1,
+						MaxRetries:     2,
+						ServiceAccount: "nightly-sync@sample-project.iam.gserviceaccount.com",
+						Cron:           &CronProfile{},
+					},
+				},
+			},
+		},
+		{
+			name: "http smoke test cannot target worker",
+			cfg: Config{
+				ProjectID:                  "sample-project",
+				Region:                     "us-central1",
+				ArtifactRegistryRepository: "platform-services",
+				SmokeTests: []SmokeTest{
+					{Name: "worker-http", Service: "queue-worker"},
+				},
+				Services: []Service{
+					{
+						Name:           "queue-worker",
+						Profile:        "worker",
+						Image:          "us-central1-docker.pkg.dev/sample/repo/queue-worker:latest",
+						CPU:            "1",
+						Memory:         "512Mi",
+						Timeout:        "1800s",
+						Tasks:          1,
+						Parallelism:    1,
+						MaxRetries:     1,
+						ServiceAccount: "queue-worker@sample-project.iam.gserviceaccount.com",
+					},
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.cfg.setDefaults()
+			if err := test.cfg.Validate(); err == nil {
+				t.Fatal("expected caddy validation error")
+			}
+		})
+	}
+}

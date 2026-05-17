@@ -1,0 +1,42 @@
+baseURL = 'https://djburkhart.github.io/gcpgrlx/'
+locale = 'en-us'
+title = 'gcpgrlx'
+theme = 'gcpgrlx-modern'
+enableRobotsTXT = true
+disableKinds = ['taxonomy', 'term']
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    noClasses = false
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+[params]
+  description = 'gcpgrlx is a companion CLI for grlx and Google Cloud that renders Cloud Run deployment recipes for gRPC and HTTP microservices.'
+  repoURL = 'https://github.com/djburkhart/gcpgrlx'
+  releasesURL = 'https://github.com/djburkhart/gcpgrlx/releases'
+  pkgURL = 'https://pkg.go.dev/github.com/djburkhart/gcpgrlx'
+  grlxURL = 'https://www.grlx.dev/'
+  pagesURL = 'https://djburkhart.github.io/gcpgrlx/'
+  overviewImage = 'https://raw.githubusercontent.com/djburkhart/gcpgrlx/main/overview.png'
+  architectureImage = 'https://raw.githubusercontent.com/djburkhart/gcpgrlx/main/microservices-architecture-diagram.png'
+
+[menu]
+  [[menu.main]]
+    name = 'Home'
+    pageRef = '/'
+    weight = 1
+
+  [[menu.main]]
+    name = 'Docs'
+    pageRef = '/docs'
+    weight = 2
+
+  [[menu.main]]
+    name = 'GitHub'
+    url = 'https://github.com/djburkhart/gcpgrlx'
+    weight = 3

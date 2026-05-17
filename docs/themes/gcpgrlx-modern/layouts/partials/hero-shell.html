@@ -1,0 +1,77 @@
+<div class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+    <div class="flex items-center gap-2">
+      <span class="h-3 w-3 rounded-full bg-rose-400"></span>
+      <span class="h-3 w-3 rounded-full bg-amber-300"></span>
+      <span class="h-3 w-3 rounded-full bg-emerald-400"></span>
+    </div>
+    <div class="flex items-center gap-2 rounded-full bg-slate-100 p-1">
+      <button type="button" class="example-tab-button active" data-example-tab="input">input</button>
+      <button type="button" class="example-tab-button" data-example-tab="commands">commands</button>
+      <button type="button" class="example-tab-button" data-example-tab="output">output</button>
+    </div>
+  </div>
+
+  <div class="bg-slate-50/70 p-5">
+    <div class="example-panel space-y-3" data-example-panel="input">
+      <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Sample config</div>
+      <pre class="overflow-x-auto rounded-2xl bg-slate-900 px-4 py-4 text-sm leading-7 text-slate-200"><code>project_id: sample-platform-prod
+region: us-central1
+artifact_registry_repository: platform-services
+caddy:
+  enabled: true
+services:
+  - name: identity-grpc
+    protocol: grpc
+    caddy:
+      domain: api.sample-platform.dev
+      presets: [compression, security-headers]
+  - name: analytics-worker
+    profile: worker</code></pre>
+    </div>
+
+    <div class="example-panel space-y-3" data-example-panel="commands" hidden>
+      <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Run locally</div>
+      <pre class="overflow-x-auto rounded-2xl bg-slate-900 px-4 py-4 text-sm leading-7 text-slate-200"><code>gcpgrlx validate -f .\examples\microservices.yaml
+gcpgrlx plan -f .\examples\microservices.yaml
+gcpgrlx render-caddy -f .\examples\microservices.yaml --stdout
+gcpgrlx render -f .\examples\microservices.yaml -out .\dist
+grlx cook .\dist\deploy.grlx -T gcp-runner --test</code></pre>
+    </div>
+
+    <div class="example-panel space-y-3" data-example-panel="output" hidden>
+      <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Generated deploy.grlx</div>
+      <pre class="overflow-x-auto rounded-2xl bg-slate-900 px-4 py-4 text-sm leading-7 text-slate-200"><code>name: gcpgrlx-cloud-run-deploy
+states:
+  - name: "Deploy identity-grpc"
+    cmd.run:
+      - name: "gcloud run deploy 'identity-grpc' ..."
+  - name: "Deploy analytics-worker"
+    cmd.run:
+      - name: "gcloud run jobs deploy 'analytics-worker' ..."
+  - name: "Apply Caddy configuration"
+  - name: "Run smoke test: identity edge route"</code></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+  (() => {
+    const buttons = document.querySelectorAll("[data-example-tab]");
+    const panels = document.querySelectorAll("[data-example-panel]");
+    if (!buttons.length || !panels.length) return;
+
+    const showPanel = (name) => {
+      buttons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.exampleTab === name);
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.dataset.examplePanel !== name;
+      });
+    };
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => showPanel(button.dataset.exampleTab));
+    });
+  })();
+</script>

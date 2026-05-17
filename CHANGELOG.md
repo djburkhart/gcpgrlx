@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on **Keep a Changelog**, with the current working tree tracked under **Unreleased** until those changes are committed and tagged.
 
+## [v0.3.0] - 2026-05-17
+
+### Added
+- Added advanced Caddy support with reusable snippets, per-service cohorts, inline `text/template` rendering, and built-in middleware presets.
+- Added `render-caddy` so the CLI can render the generated Caddyfile directly.
+- Added deploy-time Caddy install, apply, validate, reload, and live Cloud Run upstream patching steps to generated recipes.
+- Added configurable `smoke_tests` for HTTP and command-based end-to-end verification after rollout.
+- Added `worker` and `cron` service profiles with Cloud Run Jobs and Cloud Scheduler rendering.
+- Added updated sample and example configs covering Caddy routing, smoke tests, worker jobs, cron jobs, and middleware presets.
+
+### Changed
+- Expanded config validation to cover Caddy imports, preset resolution, smoke tests, and worker or cron profile constraints.
+- Expanded rendered deployment plans and recipes to include Caddy lifecycle work, post-deploy verification, and non-service workloads.
+- Refreshed the docs site so the getting started flow, CLI reference, homepage examples, and deployment flow match the current feature set.
+
 ## [v0.2.1] - 2026-05-16
 - Update `.gitignore`.
 - Add release automation.

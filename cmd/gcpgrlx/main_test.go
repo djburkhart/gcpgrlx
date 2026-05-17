@@ -110,3 +110,29 @@ func TestRunInitWritesSampleConfig(t *testing.T) {
 		t.Fatal("expected sample config services")
 	}
 }
+
+func TestRunRenderCaddyStdout(t *testing.T) {
+	raw, err := gcpgrlx.SampleConfigYAML()
+	if err != nil {
+		t.Fatalf("SampleConfigYAML returned error: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "microservices.yaml")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"render-caddy", "-f", configPath, "--stdout"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "api.sample-platform.dev {") {
+		t.Fatalf("unexpected render-caddy output: %s", output)
+	}
+	if !strings.Contains(output, "handle_path /identity/* {") {
+		t.Fatalf("render-caddy output missing route block: %s", output)
+	}
+}

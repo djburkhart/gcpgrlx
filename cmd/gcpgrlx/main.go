@@ -19,7 +19,7 @@ func main() {
 func run(args []string, stdout io.Writer, stderr io.Writer) error {
 	_ = stderr
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gcpgrlx <render|render-stdout|plan|validate|init> [flags]")
+		return fmt.Errorf("usage: gcpgrlx <render|render-stdout|render-caddy|plan|validate|init> [flags]")
 	}
 
 	switch args[0] {
@@ -27,6 +27,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return render(args[1:], stdout)
 	case "render-stdout":
 		return renderStdout(args[1:], stdout)
+	case "render-caddy":
+		return renderCaddy(args[1:], stdout)
 	case "plan":
 		return plan(args[1:], stdout)
 	case "validate":
@@ -75,6 +77,40 @@ func render(args []string, stdout io.Writer) error {
 
 func renderStdout(args []string, stdout io.Writer) error {
 	return render(append(args, "--stdout"), stdout)
+}
+
+func renderCaddy(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("render-caddy", flag.ExitOnError)
+	configPath := fs.String("f", "", "path to deployment config yaml")
+	outDir := fs.String("out", ".", "output directory")
+	stdoutOnly := fs.Bool("stdout", false, "write rendered Caddyfile to stdout")
+	fs.Parse(args)
+
+	if *configPath == "" {
+		return fmt.Errorf("render-caddy requires -f <config.yaml>")
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+
+	if *stdoutOnly {
+		rendered, err := gcpgrlx.RenderCaddyfile(cfg)
+		if err != nil {
+			return fmt.Errorf("render caddyfile: %w", err)
+		}
+		_, err = fmt.Fprint(stdout, rendered)
+		return err
+	}
+
+	path, err := gcpgrlx.WriteCaddyFile(cfg, *outDir)
+	if err != nil {
+		return fmt.Errorf("write caddyfile: %w", err)
+	}
+
+	_, err = fmt.Fprintf(stdout, "wrote %s\n", filepath.Clean(path))
+	return err
 }
 
 func plan(args []string, stdout io.Writer) error {

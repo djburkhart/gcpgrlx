@@ -1,0 +1,101 @@
+{{ define "main" }}
+  <section class="mx-auto flex w-full max-w-7xl flex-col gap-16 px-6 pb-20 pt-12 md:px-10 lg:gap-20 lg:pb-24 lg:pt-16">
+    <div class="grid items-start gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:gap-14">
+      <div class="space-y-8">
+        <div class="inline-flex items-center gap-2 rounded-full border border-pink-200 bg-white px-4 py-1.5 text-sm text-slate-700 shadow-[0_16px_35px_rgba(15,23,42,0.06)]">
+          <span class="inline-flex h-2.5 w-2.5 rounded-full bg-pink-500"></span>
+          v0.3.0 released: open-source companion CLI for <a class="font-medium text-pink-700 hover:text-pink-800" href="{{ .Site.Params.grlxURL }}">grlx</a> and Google Cloud
+        </div>
+
+        <div class="space-y-5">
+          <h1 class="max-w-4xl text-5xl font-semibold tracking-tight text-slate-950 sm:text-6xl">
+            See exactly how <code>gcpgrlx</code> turns YAML into <code>.grlx</code>.
+          </h1>
+          <p class="max-w-3xl text-lg leading-8 text-slate-600 sm:text-xl">
+            Start with a deployment spec, validate it, render a recipe, and inspect the generated output before you run it through <code>grlx</code>.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap gap-4">
+          <a href="{{ relURL "docs/" }}" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Read the docs</a>
+          <a href="{{ .Site.Params.repoURL }}" class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-50">View on GitHub</a>
+        </div>
+
+        <div class="space-y-3">
+          <div class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Quick test</div>
+          <pre class="overflow-x-auto rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm leading-7 text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"><code>go install github.com/djburkhart/gcpgrlx/cmd/gcpgrlx@v0.3.0
+gcpgrlx validate -f .\examples\microservices.yaml
+gcpgrlx render -f .\examples\microservices.yaml -out .\dist
+grlx cook .\dist\deploy.grlx -T gcp-runner --test</code></pre>
+        </div>
+      </div>
+
+      {{ partial "hero-shell.html" . }}
+    </div>
+
+    <section class="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
+      <article class="space-y-3">
+        <h2 class="text-2xl font-semibold tracking-tight text-slate-950">Minimal input.</h2>
+        <p class="text-base leading-8 text-slate-600">Describe services, jobs, rollout controls, networking, Caddy routes, and probes in YAML instead of constructing long deploy commands by hand.</p>
+      </article>
+      <article class="space-y-3">
+        <h2 class="text-2xl font-semibold tracking-tight text-slate-950">Deterministic output.</h2>
+        <p class="text-base leading-8 text-slate-600">Review the generated <code>deploy.grlx</code> file before you run it so the deployment flow stays transparent.</p>
+      </article>
+      <article class="space-y-3">
+        <h2 class="text-2xl font-semibold tracking-tight text-slate-950">Easy testing.</h2>
+        <p class="text-base leading-8 text-slate-600">Validate, render, dry-run with <code>grlx cook --test</code>, and attach smoke tests to verify the rollout path end to end.</p>
+      </article>
+    </section>
+
+    <section class="grid gap-8 lg:grid-cols-[1fr_1fr] lg:gap-12">
+      <div class="space-y-5">
+        <div class="pill-label">Workflow</div>
+        <h2 class="text-4xl font-semibold tracking-tight text-slate-950">A simple path from config to generated recipe.</h2>
+        <p class="max-w-3xl text-lg leading-8 text-slate-600">Use the docs site like a reference sheet: see a real input file, the commands to run, the generated <code>.grlx</code> output, and how Caddy and post-deploy verification fit into the same rollout.</p>
+        <ol class="space-y-3 text-base leading-8 text-slate-600">
+          <li><strong class="text-slate-950">1.</strong> Start from <code>examples\microservices.yaml</code> or generate a sample with <code>init</code>.</li>
+          <li><strong class="text-slate-950">2.</strong> Run <code>validate</code>, <code>plan</code>, and <code>render-caddy</code> to inspect the deployment shape and edge routing.</li>
+          <li><strong class="text-slate-950">3.</strong> Run <code>render</code> to generate <code>dist\deploy.grlx</code>, then dry-run it through <code>grlx</code>.</li>
+        </ol>
+      </div>
+
+      <div class="glass-card overflow-hidden p-5 lg:p-6">
+        <div class="pill-label">Test flow</div>
+        <div class="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-3">
+          <img src="{{ relURL "images/github-actions-flow.svg" }}" alt="Push to GitHub, GitHub Actions, render gcpgrlx recipe, grlx cook, and deploy to Cloud Run" class="mx-auto w-full max-w-[22rem] lg:max-w-[24rem]" />
+        </div>
+      </div>
+    </section>
+
+    <section class="space-y-8">
+      <div class="space-y-4">
+        <div class="pill-label">Docs</div>
+        <h2 class="text-4xl font-semibold tracking-tight text-slate-950">Start with the essentials.</h2>
+        <p class="max-w-3xl text-lg leading-8 text-slate-600">Use these pages to install the CLI, run the sample config, inspect generated output, and understand how the Pages site is published.</p>
+      </div>
+
+      <div class="grid gap-5 md:grid-cols-2 lg:gap-6">
+        {{ range first 4 ((where .Site.RegularPages "Section" "docs").ByWeight) }}
+          <a href="{{ .RelPermalink }}" class="glass-card group block p-6 transition hover:-translate-y-0.5 hover:border-pink-200 hover:shadow-[0_24px_60px_rgba(15,23,42,0.10)]">
+            <div class="text-sm uppercase tracking-[0.18em] text-pink-700/80">{{ .Section }}</div>
+            <h3 class="mt-4 text-xl font-semibold text-slate-900 transition group-hover:text-pink-700">{{ .Title }}</h3>
+            <p class="mt-3 text-sm leading-7 text-slate-600">{{ .Description }}</p>
+            <div class="mt-6 text-sm font-medium text-pink-700">Read guide →</div>
+          </a>
+        {{ end }}
+      </div>
+    </section>
+
+    <section class="flex flex-col gap-5 border-t border-slate-200 pt-6 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h2 class="text-2xl font-semibold tracking-tight text-slate-950">Open source and release-ready.</h2>
+        <p class="mt-2 max-w-2xl text-base leading-7 text-slate-600">Use the repository as the source for docs, release artifacts, and the CLI itself.</p>
+      </div>
+      <div class="flex flex-wrap gap-4">
+        <a href="{{ .Site.Params.releasesURL }}" class="inline-flex items-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-50">Release artifacts</a>
+        <a href="{{ .Site.Params.pagesURL }}" class="inline-flex items-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-50">Pages URL</a>
+      </div>
+    </section>
+  </section>
+{{ end }}

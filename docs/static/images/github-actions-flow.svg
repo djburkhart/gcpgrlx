@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="760" viewBox="0 0 400 760" fill="none">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="400" height="760" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10" fill="#0f172a"/>
+    </marker>
+    <style>
+      .label { font: 600 14px Inter, Arial, sans-serif; fill: #475569; letter-spacing: .08em; text-transform: uppercase; }
+      .title { font: 700 22px Inter, Arial, sans-serif; fill: #0f172a; }
+      .body { font: 600 17px Inter, Arial, sans-serif; fill: #0f172a; }
+      .small { font: 600 16px Inter, Arial, sans-serif; fill: #0f172a; }
+    </style>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <circle cx="200" cy="84" r="60" fill="#fff" stroke="#0f172a" stroke-width="3"/>
+    <text x="200" y="75" text-anchor="middle" class="small">Deploy to</text>
+    <text x="200" y="99" text-anchor="middle" class="small">Cloud Run</text>
+
+    <path d="M200 145V215" stroke="#0f172a" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <text x="60" y="240" class="label">grlx + gcpgrlx</text>
+    <rect x="32" y="252" width="336" height="182" rx="28" fill="#fff" stroke="#0f172a" stroke-width="3"/>
+    <text x="200" y="312" text-anchor="middle" class="body">Apply to Farmer (grlx cook)</text>
+    <text x="200" y="364" text-anchor="middle" class="body">Render recipe (gcpgrlx render)</text>
+    <text x="200" y="416" text-anchor="middle" class="body">Install gcpgrlx + grlx CLI</text>
+
+    <path d="M200 494V562" stroke="#0f172a" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <circle cx="200" cy="612" r="56" fill="#fff" stroke="#0f172a" stroke-width="3"/>
+    <text x="200" y="604" text-anchor="middle" class="body">GitHub</text>
+    <text x="200" y="628" text-anchor="middle" class="body">Actions</text>
+
+    <path d="M200 668V704" stroke="#0f172a" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <circle cx="200" cy="726" r="34" fill="#fff" stroke="#0f172a" stroke-width="3"/>
+    <text x="200" y="732" text-anchor="middle" class="body">Push</text>
+  </g>
+</svg>
